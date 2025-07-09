@@ -1,9 +1,13 @@
 # ProtoExtractor
 
-该工具用于将 protoc 编译的 C# 代码转换为 protobuf 定义文件。
+该工具用于将 protoc 编译的代码转换为 protobuf 定义文件。
 
 ## 环境要求
 - [Python 3.13](https://www.python.org/)
+
+## 支持的语言
+- CSharp
+- Java
 
 ## 用法
 ```
