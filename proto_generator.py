@@ -28,6 +28,8 @@ def get_proto_file_name(source_code, file_descriptor, source_language):
         name = get_csharp_proto_name(source_code)
     elif source_language == 'java':
         name = get_java_proto_name(source_code)
+    elif source_language == 'go':
+        name = get_go_proto_name(source_code)
 
     if name:
         return name
@@ -57,6 +59,18 @@ def get_java_proto_name(java_code):
         if class_name.endswith("OuterClass"):
             class_name = class_name[:-len("OuterClass")]
         return f"{class_name}.proto"
+    return None
+
+def get_go_proto_name(go_code):
+    source_match = re.search(r'^//\s*source:\s*(.+?\.proto)\s*$', go_code, re.MULTILINE)
+    if source_match:
+        return Path(source_match.group(1)).name
+
+    pattern = re.compile(r'var\s+file_(\w+)_proto_rawDesc')
+    match = pattern.search(go_code)
+    if match:
+        return f"{match.group(1)}.proto"
+
     return None
 
 def generate_proto_content(file_descriptor):

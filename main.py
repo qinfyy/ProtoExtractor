@@ -37,7 +37,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java"],
+            choices=["csharp", "java", "go"],
             required=False,
         )
         parser.add_argument(
@@ -88,6 +88,8 @@ if __name__ == "__main__":
                 file_pattern = "*.cs"
             elif source_language == "java":
                 file_pattern = "*.java"
+            elif source_language == "go":
+                file_pattern = "*.go"
             else:
                 raise ValueError(f"Unsupported language: {source_language}")
 

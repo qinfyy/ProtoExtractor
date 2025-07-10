@@ -7,6 +7,8 @@ def extract_descriptor_data(source_code, source_language):
         return extract_from_csharp(source_code)
     elif source_language == 'java':
         return extract_from_java(source_code)
+    elif source_language == 'go':
+        return extract_from_go(source_code)
     else:
         raise ValueError(f"Unsupported source language: {source_language}")
 
@@ -71,6 +73,21 @@ def extract_from_java(java_code):
     raw_bytes = process_escape_sequences(full_string).encode("latin-1")
     return raw_bytes
 
+def extract_from_go(go_code):
+    # var file_filename_proto_rawDesc = []byte{...}
+    pattern = re.compile(
+        r'var\s+file_\w+_proto_rawDesc\s*=\s*\[]byte\{([\s\S]+?)}',
+        re.DOTALL
+    )
+
+    match = pattern.search(go_code)
+    if not match:
+        print("Raw descriptor byte array not found in Go code")
+        return None
+
+    byte_array_content = match.group(1)
+    return parse_go_byte_array(byte_array_content)
+
 def process_escape_sequences(escaped_string, supports_unicode=True):
     if supports_unicode:
         def replace_unicode(match):
@@ -121,3 +138,38 @@ def process_escape_sequences(escaped_string, supports_unicode=True):
         escaped_string = escaped_string.replace(esc, replacement)
 
     return escaped_string
+
+def parse_go_byte_array(byte_array):
+    byte_array = byte_array.replace('\n', '')
+    byte_array = byte_array.replace(' ', '')
+    byte_array = byte_array.strip()
+
+    byte_strs = byte_array.split(',')
+    data = bytearray()
+
+    for byte_str in byte_strs:
+        byte_str = byte_str.strip()
+        if not byte_str:
+            continue
+
+        if byte_str.startswith('0x'):
+            try:
+                hex_str = byte_str[2:]
+                if len(hex_str) == 1:
+                    hex_str = '0' + hex_str
+                data.append(int(hex_str, 16))
+            except ValueError:
+                print(f"Invalid hex byte: {byte_str}")
+                return None
+        else:
+            try:
+                value = int(byte_str)
+                if value < 0 or value > 255:
+                    print(f"Byte value out of range: {value}")
+                    return None
+                data.append(value)
+            except ValueError:
+                print(f"Invalid decimal byte: {byte_str}")
+                return None
+
+    return bytes(data)
