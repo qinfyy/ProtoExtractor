@@ -9,6 +9,10 @@ def extract_descriptor_data(source_code, source_language):
         return extract_from_java(source_code)
     elif source_language == 'go':
         return extract_from_go(source_code)
+    elif source_language == 'python':
+        return extract_from_python(source_code)
+    elif source_language == 'ruby':
+        return extract_from_ruby(source_code)
     else:
         raise ValueError(f"Unsupported source language: {source_language}")
 
@@ -87,6 +91,65 @@ def extract_from_go(go_code):
 
     byte_array_content = match.group(1)
     return parse_go_byte_array(byte_array_content)
+
+def extract_from_python(python_code):
+    # DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'...')
+    pattern = re.compile(
+        r'DESCRIPTOR\s*=\s*_descriptor_pool\.Default\(\)\.AddSerializedFile\(b([\'"])(.*?)\1\)',
+        re.DOTALL
+    )
+
+    match = pattern.search(python_code)
+    if not match:
+        # DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile('...')
+        pattern = re.compile(
+            r'DESCRIPTOR\s*=\s*_descriptor_pool\.Default\(\)\.AddSerializedFile\(([\'"])(.*?)\1\)',
+            re.DOTALL
+        )
+        match = pattern.search(python_code)
+        if not match:
+            print("DESCRIPTOR assignment with AddSerializedFile not found")
+            return None
+
+    byte_str = match.group(2)
+
+    processed_bytes = process_escape_sequences(byte_str).encode("latin-1")
+    return processed_bytes
+
+def extract_from_ruby(ruby_code):
+    # descriptor_data = "..."
+    pattern = re.compile(
+        r'descriptor_data\s*=\s*"((?:\\"|[^"])*)"',
+        re.DOTALL
+    )
+
+    match = pattern.search(ruby_code)
+    if match:
+        escaped_string = match.group(1)
+        processed_bytes = process_escape_sequences(escaped_string).encode("latin-1")
+        return processed_bytes
+
+    # pool.add_serialized_file(descriptor_data)
+    pool_match = re.search(
+        r'pool\.add_serialized_file\(descriptor_data\)',
+        ruby_code
+    )
+    if pool_match:
+        assignment_pattern = re.compile(
+            r'(descriptor_data\s*=\s*[\s\S]+?)\n\s*pool\.add_serialized_file',
+            re.DOTALL
+        )
+        assignment_match = assignment_pattern.search(ruby_code)
+        if assignment_match:
+            assignment_line = assignment_match.group(1)
+            string_match = re.search(r'"((?:\\"|[^"])*)"', assignment_line)
+            if string_match:
+                escaped_string = string_match.group(1)
+                return process_escape_sequences(escaped_string).encode("latin-1")
+
+    print("descriptor_data assignment not found in Ruby code")
+    return None
+
 
 def process_escape_sequences(escaped_string, supports_unicode=True):
     if supports_unicode:

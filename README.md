@@ -8,6 +8,8 @@
 ## 支持的语言
 - CSharp
 - Java
+- Python
+- Ruby
 
 ## 用法
 ```

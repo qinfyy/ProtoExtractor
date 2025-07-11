@@ -30,6 +30,10 @@ def get_proto_file_name(source_code, file_descriptor, source_language):
         name = get_java_proto_name(source_code)
     elif source_language == 'go':
         name = get_go_proto_name(source_code)
+    elif source_language == 'python':
+        name = get_python_proto_name(source_code)
+    elif source_language == 'ruby':
+        name = get_ruby_proto_name(source_code)
 
     if name:
         return name
@@ -71,6 +75,18 @@ def get_go_proto_name(go_code):
     if match:
         return f"{match.group(1)}.proto"
 
+    return None
+
+def get_python_proto_name(python_code):
+    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', python_code, re.MULTILINE)
+    if source_match:
+        return Path(source_match.group(1)).name
+    return None
+
+def get_ruby_proto_name(ruby_code):
+    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', ruby_code, re.MULTILINE)
+    if source_match:
+        return Path(source_match.group(1)).name
     return None
 
 def generate_proto_content(file_descriptor):
