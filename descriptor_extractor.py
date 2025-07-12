@@ -73,7 +73,7 @@ def extract_from_java(java_code):
     array_content = array_match.group(1)
     full_string = ""
 
-    string_pattern = re.compile(r'"((?:\\\"|[^\"])*?)"', re.DOTALL)
+    string_pattern = re.compile(r'"((?:\\.|[^"\\])*)"')
     for match in string_pattern.finditer(array_content):
         escaped_string = match.group(1)
         full_string += escaped_string
