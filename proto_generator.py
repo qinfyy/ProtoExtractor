@@ -6,18 +6,35 @@ def generate_proto_file(descriptor_data, output_directory, source_code, source_l
     output_path = Path(output_directory)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    file_descriptor = descriptor_pb2.FileDescriptorProto()
-    file_descriptor.ParseFromString(descriptor_data)
+    if source_language == 'php':
+        file_set = descriptor_pb2.FileDescriptorSet()
+        file_set.ParseFromString(descriptor_data)
 
-    proto_file_name = get_proto_file_name(source_code, file_descriptor, source_language)
-    output_file = output_path / proto_file_name
+        generated_files = []
+        for file_proto in file_set.file:
+            proto_file_name = get_proto_file_name(source_code, file_proto, source_language)
+            output_file = output_path / proto_file_name
 
-    proto_content = generate_proto_content(file_descriptor)
+            proto_content = generate_proto_content(file_proto)
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(proto_content)
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(proto_content)
 
-    print(f"Generated: {output_file}")
+            print(f"Generated: {output_file}")
+            generated_files.append(str(output_file))
+    else:
+        file_descriptor = descriptor_pb2.FileDescriptorProto()
+        file_descriptor.ParseFromString(descriptor_data)
+
+        proto_file_name = get_proto_file_name(source_code, file_descriptor, source_language)
+        output_file = output_path / proto_file_name
+
+        proto_content = generate_proto_content(file_descriptor)
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
 
 def get_proto_file_name(source_code, file_descriptor, source_language):
     if file_descriptor.name:
@@ -34,6 +51,10 @@ def get_proto_file_name(source_code, file_descriptor, source_language):
         name = get_python_proto_name(source_code)
     elif source_language == 'ruby':
         name = get_ruby_proto_name(source_code)
+    elif source_language == 'php':
+        name = get_php_proto_name(source_code)
+    elif source_language == 'cpp':
+        name = get_cpp_proto_name(source_code)
 
     if name:
         return name
@@ -87,6 +108,35 @@ def get_ruby_proto_name(ruby_code):
     source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', ruby_code, re.MULTILINE)
     if source_match:
         return Path(source_match.group(1)).name
+    return None
+
+def get_php_proto_name(php_code):
+    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', php_code, re.MULTILINE)
+    if source_match:
+        return Path(source_match.group(1)).name
+
+    class_match = re.search(r'class\s+(\w+)\s*\{', php_code)
+    if class_match:
+        return f"{class_match.group(1)}.proto"
+    
+    return None
+
+def get_cpp_proto_name(cpp_code):
+    source_match = re.search(r'^//\s*source:\s*(.+?\.proto)\s*$', cpp_code)
+    if source_match:
+        return Path(source_match.group(1)).name
+
+    pattern = re.compile(
+        r'const\s+char\s+descriptor_table_protodef_(\w+)\[\]',
+        re.DOTALL
+    )
+    match = pattern.search(cpp_code)
+    if match:
+        file_name = match.group(1)
+        file_name = file_name.replace('_2e', '.')
+        file_name = file_name.replace('_5f', '_')
+        return file_name
+
     return None
 
 def generate_proto_content(file_descriptor):

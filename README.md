@@ -10,6 +10,8 @@
 - Java
 - Python
 - Ruby
+- Php
+- C++
 
 ## 用法
 ```

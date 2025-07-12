@@ -13,6 +13,10 @@ def extract_descriptor_data(source_code, source_language):
         return extract_from_python(source_code)
     elif source_language == 'ruby':
         return extract_from_ruby(source_code)
+    elif source_language == 'php':
+        return extract_from_php(source_code)
+    elif source_language == 'cpp':
+        return extract_from_cpp(source_code)
     else:
         raise ValueError(f"Unsupported source language: {source_language}")
 
@@ -150,11 +154,102 @@ def extract_from_ruby(ruby_code):
     print("descriptor_data assignment not found in Ruby code")
     return None
 
+def extract_from_php(php_code):
+    # $pool->internalAddGeneratedFile(...)
+    pattern = re.compile(
+        r'\$pool->internalAddGeneratedFile\s*\(\s*"((?:\\"|[^"])*)"\s*,\s*true\s*\)',
+        re.DOTALL
+    )
+
+    match = pattern.search(php_code)
+    if not match:
+        print("internalAddGeneratedFile call not found in PHP code")
+        return None
+
+    escaped_string = match.group(1)
+    processed_bytes = process_escape_sequences(escaped_string).encode("latin-1")
+    return processed_bytes
+
+def extract_from_cpp(cpp_code):
+    pattern = re.compile(
+        r'const\s+char\s+descriptor_table_protodef_\w+\[]\s*ABSL_ATTRIBUTE_SECTION_VARIABLE\(\s*protodesc_cold\s*\)\s*=\s*{\s*([\s\S]+?)\s*}\s*;',
+        re.DOTALL
+    )
+
+    match = pattern.search(cpp_code)
+    if not match:
+        pattern = re.compile(
+            r'const\s+char\s+descriptor_table_protodef_\w+\[]\s*=\s*{\s*([\s\S]+?)\s*}\s*;',
+            re.DOTALL
+        )
+        match = pattern.search(cpp_code)
+        if not match:
+            print("Descriptor table not found in C++ code")
+            return None
+
+    array_content = match.group(1)
+    full_bytes = bytearray()
+
+    char_pattern = re.compile(
+        r"'("
+        r"(?:"
+        r"\\['\"\\?abfnrtv]|"
+        r"\\[0-7]{1,3}|"
+        r"\\x[0-9a-fA-F]{2}|"
+        r"\\u[0-9a-fA-F]{4}|"
+        r"\\U[0-9a-fA-F]{8}|"
+        r"\\\\|"
+        r"."
+        r")"
+        r")\s*?'", 
+        re.DOTALL
+    )
+    
+    char_matches = char_pattern.findall(array_content)
+    
+    if char_matches:
+        for char_match in char_matches:
+            processed_char = process_escape_sequences(char_match, supports_unicode=False)
+            
+            if not processed_char:
+                print(f"Warning: Failed to process escape sequence: {char_match}")
+                continue
+                
+            if len(processed_char) != 1:
+                print(f"Warning: Processed character should be single byte but got: {processed_char}")
+                
+            for char in processed_char:
+                char_code = ord(char)
+                if char_code < 256:
+                    full_bytes.append(char_code)
+                else:
+                    print(f"Warning: Character code out of byte range: {char_code}")
+                    full_bytes.append(char_code & 0xFF)
+    
+    if full_bytes:
+        return bytes(full_bytes)
+    
+    full_string = ""
+    string_pattern = re.compile(r'"((?:\\"|[^"])*)"', re.DOTALL)
+    for match in string_pattern.finditer(array_content):
+        escaped_string = match.group(1)
+        full_string += escaped_string
+
+    if full_string:
+        processed_string = process_escape_sequences(full_string)
+        raw_bytes = processed_string.encode("latin-1")
+        return raw_bytes
+    
+    print("No valid descriptor data found in C++ code")
+    return None
 
 def process_escape_sequences(escaped_string, supports_unicode=True):
     if supports_unicode:
         def replace_unicode(match):
             hex_str = match.group(1)
+            if len(hex_str) % 2 != 0:
+                hex_str = '0' + hex_str
+
             return bytes.fromhex(hex_str).decode('latin-1')
 
         escaped_string = re.sub(
@@ -162,6 +257,19 @@ def process_escape_sequences(escaped_string, supports_unicode=True):
             replace_unicode,
             escaped_string
         )
+
+        escaped_string = re.sub(
+            r"\\U([0-9a-fA-F]{8})",
+            replace_unicode,
+            escaped_string
+        )
+
+        if '\\x{' in escaped_string:
+            escaped_string = re.sub(
+                r"\\x\{([0-9a-fA-F]{2,6})\}",
+                replace_unicode,
+                escaped_string
+            )
 
     def replace_octal(match):
         octal_str = match.group(1)
@@ -194,7 +302,15 @@ def process_escape_sequences(escaped_string, supports_unicode=True):
         "\\t": "\t",
         "\\\"": "\"",
         "\\'": "'",
-        "\\\\": "\\"
+        "\\\\": "\\",
+        "\\v": "\v",
+        "\\0": "\0",
+        '\\$': '$',
+        '\\{': '{',
+        '\\}': '}',
+        "\\e": "\x1b",
+        "\\?": "?",
+        "\\a": "\a"
     }
 
     for esc, replacement in simple_escapes.items():
