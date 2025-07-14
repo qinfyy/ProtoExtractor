@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 from descriptor_extractor import extract_descriptor_data
 from proto_generator import generate_proto_file
+from prost_extractor import convert_rust_to_proto
 
 def unquote_argument(arg):
     if arg.startswith('"') and arg.endswith('"'):
@@ -15,6 +16,25 @@ def print_usage():
     print("  --output, -o    Output directory path.")
     print("  --lang, -l      Source language.")
     print("  --help, -h      Display this help message.")
+
+def process_file(file_path, output_dir, source_language, source_code):
+    if source_language == "prost":
+        proto_content = convert_rust_to_proto(source_code)
+        output_file = output_dir / (file_path.stem + ".proto")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
+    else:
+        descriptor_data = extract_descriptor_data(source_code, source_language)
+        if not descriptor_data:
+            if input_path.is_file():
+                raise ValueError("DescriptorData not found in source code")
+            else:
+                print(f"Warning: DescriptorData not found in {file_path}. Skipping.")
+                return
+
+        generate_proto_file(descriptor_data, output_dir, source_code, source_language)
 
 if __name__ == "__main__":
     input_path = None
@@ -37,7 +57,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost"],
             required=False,
         )
         parser.add_argument(
@@ -76,12 +96,7 @@ if __name__ == "__main__":
             with open(input_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
 
-            descriptor_data = extract_descriptor_data(source_code, source_language)
-
-            if not descriptor_data:
-                raise ValueError("DescriptorData not found in source code")
-
-            generate_proto_file(descriptor_data, output_dir, source_code, source_language)
+            process_file(input_path, output_dir, source_language, source_code)
 
         elif input_path.is_dir():
             if source_language == "csharp":
@@ -98,6 +113,8 @@ if __name__ == "__main__":
                 file_pattern = "*.php"
             elif source_language == "cpp":
                 file_pattern = "*.cc"
+            elif source_language == "prost":
+                file_pattern = "*.rs"
             else:
                 raise ValueError(f"Unsupported language: {source_language}")
 
@@ -112,12 +129,7 @@ if __name__ == "__main__":
                     with open(file_path, "r", encoding="utf-8") as f:
                         source_code = f.read()
 
-                    descriptor_data = extract_descriptor_data(source_code, source_language)
-                    if not descriptor_data:
-                        print(f"Warning: DescriptorData not found in {file_path}. Skipping.")
-                        continue
-
-                    generate_proto_file(descriptor_data, output_dir, source_code, source_language)
+                    process_file(file_path, output_dir, source_language, source_code)
 
                 except Exception as e:
                     print(f"Error processing file {file_path}: {str(e)}", file=sys.stderr)
