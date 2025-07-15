@@ -4,6 +4,7 @@ from pathlib import Path
 from descriptor_extractor import extract_descriptor_data
 from proto_generator import generate_proto_file
 from prost_extractor import convert_rust_to_proto
+from zig_extractor import convert_proto
 
 def unquote_argument(arg):
     if arg.startswith('"') and arg.endswith('"'):
@@ -20,6 +21,13 @@ def print_usage():
 def process_file(file_path, output_dir, source_language, source_code):
     if source_language == "prost":
         proto_content = convert_rust_to_proto(source_code)
+        output_file = output_dir / (file_path.stem + ".proto")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
+    elif source_language == "zig":
+        proto_content = convert_proto(source_code)
         output_file = output_dir / (file_path.stem + ".proto")
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(proto_content)
@@ -57,7 +65,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig"],
             required=False,
         )
         parser.add_argument(
@@ -115,6 +123,8 @@ if __name__ == "__main__":
                 file_pattern = "*.cc"
             elif source_language == "prost":
                 file_pattern = "*.rs"
+            elif source_language == "zig":
+                file_pattern = "*.zig"
             else:
                 raise ValueError(f"Unsupported language: {source_language}")
 

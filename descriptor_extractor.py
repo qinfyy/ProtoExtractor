@@ -310,7 +310,6 @@ def process_escape_sequences(escaped_string, supports_unicode=True):
         '\\}': '}',
         "\\e": "\x1b",
         "\\?": "?",
-        "\\a": "\a"
     }
 
     for esc, replacement in simple_escapes.items():
