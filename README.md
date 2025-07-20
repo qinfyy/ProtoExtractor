@@ -14,6 +14,8 @@
 - C++
 - Go
 - Rust Prost
+- zig-protobuf
+- python-betterproto
 
 ## 用法
 ```

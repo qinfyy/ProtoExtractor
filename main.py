@@ -4,7 +4,8 @@ from pathlib import Path
 from descriptor_extractor import extract_descriptor_data
 from proto_generator import generate_proto_file
 from prost_extractor import convert_rust_to_proto
-from zig_extractor import convert_proto
+import zig_extractor
+import betterproto_extractor
 
 def unquote_argument(arg):
     if arg.startswith('"') and arg.endswith('"'):
@@ -27,7 +28,14 @@ def process_file(file_path, output_dir, source_language, source_code):
 
         print(f"Generated: {output_file}")
     elif source_language == "zig":
-        proto_content = convert_proto(source_code)
+        proto_content = zig_extractor.convert_proto(source_code)
+        output_file = output_dir / (file_path.stem + ".proto")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
+    elif source_language == "betterproto":
+        proto_content = betterproto_extractor.convert_proto(source_code)
         output_file = output_dir / (file_path.stem + ".proto")
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(proto_content)
@@ -65,7 +73,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto"],
             required=False,
         )
         parser.add_argument(
@@ -113,7 +121,7 @@ if __name__ == "__main__":
                 file_pattern = "*.java"
             elif source_language == "go":
                 file_pattern = "*.go"
-            elif source_language == "python":
+            elif source_language == "python" or source_language == "betterproto":
                 file_pattern = "*.py"
             elif source_language == "ruby":
                 file_pattern = "*.rb"
