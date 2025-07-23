@@ -6,6 +6,7 @@ from proto_generator import generate_proto_file
 from prost_extractor import convert_rust_to_proto
 import zig_extractor
 import betterproto_extractor
+import protobufnet_extractor
 
 def unquote_argument(arg):
     if arg.startswith('"') and arg.endswith('"'):
@@ -36,6 +37,13 @@ def process_file(file_path, output_dir, source_language, source_code):
         print(f"Generated: {output_file}")
     elif source_language == "betterproto":
         proto_content = betterproto_extractor.convert_proto(source_code)
+        output_file = output_dir / (file_path.stem + ".proto")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
+    elif source_language == "pbn":
+        proto_content = protobufnet_extractor.convert_proto(source_code)
         output_file = output_dir / (file_path.stem + ".proto")
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(proto_content)
@@ -73,7 +81,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto", "pbn"],
             required=False,
         )
         parser.add_argument(
@@ -115,7 +123,7 @@ if __name__ == "__main__":
             process_file(input_path, output_dir, source_language, source_code)
 
         elif input_path.is_dir():
-            if source_language == "csharp":
+            if source_language == "csharp" or source_language == "pbn":
                 file_pattern = "*.cs"
             elif source_language == "java":
                 file_pattern = "*.java"

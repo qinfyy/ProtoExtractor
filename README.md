@@ -16,6 +16,7 @@
 - Rust Prost
 - zig-protobuf
 - python-betterproto
+- protobuf-net
 
 ## 用法
 ```
