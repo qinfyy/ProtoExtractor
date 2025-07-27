@@ -93,7 +93,7 @@ namespace DotNetProtoExtractor
             var sb = new StringBuilder();
 
             var descriptorProperty = protoClass.GetProperty("Descriptor");
-            var messageDescriptor = descriptorProperty?.GetValue(null); // 静态属性
+            var messageDescriptor = descriptorProperty?.GetValue(null);
 
             if (messageDescriptor == null)
             {
