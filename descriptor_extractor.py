@@ -83,8 +83,9 @@ def extract_from_java(java_code):
 
 def extract_from_go(go_code):
     # var file_filename_proto_rawDesc = []byte{...}
+    # var file_filename_proto_rawDesc = string([]byte{...})
     pattern = re.compile(
-        r'var\s+file_\w+_proto_rawDesc\s*=\s*\[]byte\{([\s\S]+?)}',
+        r'var\s+file_\w+_proto_rawDesc\s*=\s*(?:string\s*\()?\s*\[\]byte\s*\{([\s\S]+?)\}(?:\s*\))?',
         re.DOTALL
     )
 
