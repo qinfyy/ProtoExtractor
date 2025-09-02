@@ -79,7 +79,7 @@ def extract_top_level_entities(content):
                 
             in_entity = True
             entity_type = "message" if stripped.startswith("message") else "enum"
-            current = [original_line]  # 包含原始行（含注释）
+            current = [original_line]
             brace_count = 1
             continue
         

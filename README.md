@@ -20,6 +20,6 @@
 
 ## 用法
 ```
-python install -r requirements.txt
+pip install -r requirements.txt
 python main.py <args>
 ```
