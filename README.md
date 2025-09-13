@@ -17,6 +17,7 @@
 - zig-protobuf
 - python-betterproto
 - protobuf-net
+- protobuf-net (VB.NET)
 
 ## 用法
 ```

@@ -7,6 +7,7 @@ from prost_extractor import convert_rust_to_proto
 import zig_extractor
 import betterproto_extractor
 import protobufnet_extractor
+import pbn_vb_extractor
 
 def unquote_argument(arg):
     if arg.startswith('"') and arg.endswith('"'):
@@ -49,6 +50,13 @@ def process_file(file_path, output_dir, source_language, source_code):
             f.write(proto_content)
 
         print(f"Generated: {output_file}")
+    elif source_language == "pbnvb":
+        proto_content = pbn_vb_extractor.convert_proto(source_code)
+        output_file = output_dir / (file_path.stem + ".proto")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
     else:
         descriptor_data = extract_descriptor_data(source_code, source_language)
         if not descriptor_data:
@@ -81,7 +89,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto", "pbn"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto", "pbn", "pbnvb"],
             required=False,
         )
         parser.add_argument(
@@ -141,6 +149,8 @@ if __name__ == "__main__":
                 file_pattern = "*.rs"
             elif source_language == "zig":
                 file_pattern = "*.zig"
+            elif source_language == "pbnvb":
+                file_pattern = "*.vb"
             else:
                 raise ValueError(f"Unsupported language: {source_language}")
 
