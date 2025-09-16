@@ -187,9 +187,9 @@ def find_matching_end(content, start_pos, start_keyword, end_keyword):
 
     return -1
 
-def parse_vb_class(class_content, indent=0):
+def parse_vb_class(class_content, indent=0, content_cache=None):
     indent_str = "    " * indent
-    result = ""
+    lines = []
 
     # 提取类名
     class_name_match = re.search(r'(?:Partial\s+)?Public\s+Class\s+(\w+)', class_content, re.IGNORECASE)
@@ -197,17 +197,14 @@ def parse_vb_class(class_content, indent=0):
         return ""
 
     class_name = class_name_match.group(1)
-    result += f"{indent_str}message {class_name} {{\n"
+    lines.append(f"{indent_str}message {class_name} {{")
 
     # 找到类体的精确边界
     class_start = class_name_match.end()
-    # 找到最外层的 End Class
-    class_end_pos = len(class_content)
 
-    # 从后往前找最后一个 End Class
+    # 找到最外层的 End Class
     end_class_matches = list(re.finditer(r'End\s+Class', class_content, re.IGNORECASE))
-    if end_class_matches:
-        class_end_pos = end_class_matches[-1].start()
+    class_end_pos = end_class_matches[-1].start() if end_class_matches else len(class_content)
 
     body = class_content[class_start:class_end_pos]
 
@@ -222,49 +219,65 @@ def parse_vb_class(class_content, indent=0):
         group_name = re.sub(r'^__pbn__', '', field_name)
         oneof_groups[field_name] = group_name
 
-    # 收集嵌套定义的位置
+    # 收集所有嵌套定义
     nested_definitions = []
 
-    # 查找嵌套类
-    nested_class_pattern = re.compile(
-        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_\s*'
-        r'(?:Partial\s+)?Public\s+Class\s+(\w+)',
+    # 先查找所有的ProtoContract标记
+    proto_contract_pattern = re.compile(
+        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_',
         re.IGNORECASE | re.DOTALL
     )
 
-    for match in nested_class_pattern.finditer(body):
-        start = match.start()
-        end = find_matching_end(body, match.end(), 'Class', 'End\\s+Class')
-        if end != -1:
-            nested_definitions.append({
-                'type': 'class',
-                'name': match.group(1),
-                'start': start,
-                'end': end,
-                'content': body[start:end]
-            })
+    # 查找每个ProtoContract之后的类或枚举定义
+    for contract_match in proto_contract_pattern.finditer(body):
+        start = contract_match.start()
+        # 在ProtoContract之后查找类或枚举
+        rest_content = body[contract_match.end():]
 
-    # 查找嵌套枚举
-    nested_enum_pattern = re.compile(
-        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_\s*'
-        r'Public\s+Enum\s+(\w+)',
-        re.IGNORECASE | re.DOTALL
-    )
+        # 查找类定义
+        class_match = re.match(r'\s*(?:Partial\s+)?Public\s+Class\s+(\w+)', rest_content, re.IGNORECASE | re.DOTALL)
+        if class_match:
+            name = class_match.group(1)
+            # 找到对应的End Class
+            end = find_matching_end(body, contract_match.end() + class_match.end(), 'Class', 'End\\s+Class')
+            if end != -1:
+                nested_definitions.append({
+                    'type': 'class',
+                    'name': name,
+                    'start': start,
+                    'end': end,
+                    'content': body[start:end]
+                })
+                continue
 
-    for match in nested_enum_pattern.finditer(body):
-        start = match.start()
-        end_match = re.search(r'End\s+Enum', body[start:], re.IGNORECASE)
-        if end_match:
-            end = start + end_match.end()
-            nested_definitions.append({
-                'type': 'enum',
-                'name': match.group(1),
-                'start': start,
-                'end': end,
-                'content': body[start:end]
-            })
+        # 查找枚举定义
+        enum_match = re.match(r'\s*Public\s+Enum\s+(\w+)', rest_content, re.IGNORECASE | re.DOTALL)
+        if enum_match:
+            name = enum_match.group(1)
+            # 找到对应的End Enum
+            end_enum_match = re.search(r'End\s+Enum', body[contract_match.end():], re.IGNORECASE)
+            if end_enum_match:
+                end = contract_match.end() + end_enum_match.end()
+                nested_definitions.append({
+                    'type': 'enum',
+                    'name': name,
+                    'start': start,
+                    'end': end,
+                    'content': body[start:end]
+                })
 
-    nested_ranges = [(item['start'], item['end']) for item in nested_definitions]
+    # 排序并去重嵌套定义
+    nested_definitions.sort(key=lambda x: x['start'])
+
+    # 去除重叠的定义
+    filtered_nested = []
+    prev_end = -1
+    for nested in nested_definitions:
+        if nested['start'] >= prev_end:
+            filtered_nested.append(nested)
+            prev_end = nested['end']
+
+    nested_ranges = [(item['start'], item['end']) for item in filtered_nested]
 
     # 处理字段
     fields = []
@@ -277,35 +290,29 @@ def parse_vb_class(class_content, indent=0):
         re.IGNORECASE
     )
 
-    for protomember_match in protomember_pattern.finditer(body):
+    protomember_matches = list(protomember_pattern.finditer(body))
+
+    for i, protomember_match in enumerate(protomember_matches):
         tag = int(protomember_match.group(1))
         if tag in processed_tags:
             continue
 
         # 检查是否在嵌套定义内
         pos = protomember_match.start()
-        in_nested = False
-        for start, end in nested_ranges:
-            if start <= pos < end:
-                in_nested = True
-                break
-
+        in_nested = any(start <= pos < end for start, end in nested_ranges)
         if in_nested:
             continue
 
         if is_line_commented(body, pos):
             continue
 
-        # 查找该ProtoMembe后面的属性定义
+        # 确定搜索范围
         start_pos = protomember_match.start()
-
-        # 找到下一个边界
         next_boundary = len(body)
-        next_member = protomember_pattern.search(body, protomember_match.end())
-        if next_member:
-            next_boundary = min(next_boundary, next_member.start())
 
-        # 检查嵌套定义边界
+        if i + 1 < len(protomember_matches):
+            next_boundary = min(next_boundary, protomember_matches[i + 1].start())
+
         for start, end in nested_ranges:
             if start > pos:
                 next_boundary = min(next_boundary, start)
@@ -344,7 +351,6 @@ def parse_vb_class(class_content, indent=0):
 
             converted_type = convert_dictionary_type(type_str, key_format, value_format)
         else:
-            # 对于数组类型，传递完整的类型字符串和 DataFormat
             base_type = type_str.replace('()', '').strip() if type_str.endswith('()') else type_str
             converted_type = convert_type(type_str, data_format, base_type)
 
@@ -365,43 +371,40 @@ def parse_vb_class(class_content, indent=0):
     # 输出字段
     fields.sort(key=lambda x: x[0])
     for tag, proto_name, converted_type in fields:
-        result += f"{indent_str}    {converted_type} {proto_name} = {tag};\n"
+        lines.append(f"{indent_str}    {converted_type} {proto_name} = {tag};")
 
     # 输出oneof
     for group_name, oneof_field_list in oneof_fields.items():
-        result += f"{indent_str}    oneof {group_name} {{\n"
+        lines.append(f"{indent_str}    oneof {group_name} {{")
         oneof_field_list.sort(key=lambda x: x[0])
         for tag, name, type_str in oneof_field_list:
-            result += f"{indent_str}        {type_str} {name} = {tag};\n"
-        result += f"{indent_str}    }}\n"
+            lines.append(f"{indent_str}        {type_str} {name} = {tag};")
+        lines.append(f"{indent_str}    }}")
 
     # 添加空行
-    if (fields or oneof_fields) and nested_definitions:
-        result += "\n"
+    if (fields or oneof_fields) and filtered_nested:
+        lines.append("")
 
     # 处理嵌套定义
-    nested_definitions.sort(key=lambda x: x['start'])
-
-    top_level_nested = []
-    current_end = -1
-    for nested in nested_definitions:
-        if nested['start'] > current_end:
-            top_level_nested.append(nested)
-            current_end = nested['end']
-
-    for nested in top_level_nested:
+    for nested in filtered_nested:
         if nested['type'] == 'class':
-            # 递归解析嵌套类
-            result += parse_vb_class(nested['content'], indent + 1)
+            nested_content = parse_vb_class(nested['content'], indent + 1, content_cache)
+            # 将嵌套内容分割成行并添加到当前列表
+            if nested_content:
+                lines.extend(nested_content.splitlines())
         elif nested['type'] == 'enum':
-            result += parse_vb_enum(nested['content'], indent + 1)
+            nested_content = parse_vb_enum(nested['content'], indent + 1)
+            if nested_content:
+                lines.extend(nested_content.splitlines())
 
-    result += f"{indent_str}}}\n\n"
-    return result
+    lines.append(f"{indent_str}}}")
+    lines.append("")
+
+    return "\n".join(lines)
 
 def parse_vb_enum(enum_content, indent=0):
     indent_str = "    " * indent
-    result = ""
+    lines = []
 
     # 提取枚举名
     enum_name_match = re.search(r'Public\s+Enum\s+(\w+)', enum_content, re.IGNORECASE)
@@ -409,54 +412,95 @@ def parse_vb_enum(enum_content, indent=0):
         return ""
 
     enum_name = enum_name_match.group(1)
-    result += f"{indent_str}enum {enum_name} {{\n"
+    lines.append(f"{indent_str}enum {enum_name} {{")
+
+    # 查找枚举体的开始和结束
+    enum_body_start = enum_name_match.end()
+    enum_body_end = re.search(r'End\s+Enum', enum_content, re.IGNORECASE)
+    if enum_body_end:
+        enum_body = enum_content[enum_body_start:enum_body_end.start()]
+    else:
+        enum_body = enum_content[enum_body_start:]
 
     # 提取枚举项
     enum_items = []
     used_values = set()
 
-    item_pattern = re.compile(
+    proto_enum_pattern = re.compile(
         r'<Global\.ProtoBuf\.ProtoEnum\s*[^>]*Name\s*:=\s*@?"([^"]+)"[^>]*>\s*_\s*'
-        r'(\w+)\s*=\s*(\d+)',
-        re.IGNORECASE
+        r'(\[?\w+\]?)\s*=\s*(\d+)',
+        re.IGNORECASE | re.DOTALL
     )
 
-    for item_match in item_pattern.finditer(enum_content):
-        pos = item_match.start()
-        if is_line_commented(enum_content, pos):
+    proto_enum_items = {}
+
+    for item_match in proto_enum_pattern.finditer(enum_content):
+        proto_name = item_match.group(1)
+        field_name = item_match.group(2).strip('[]')  # 移除方括号转义
+        value = int(item_match.group(3))
+        proto_enum_items[field_name] = (proto_name, value)
+
+    all_items_pattern = re.compile(
+        r'^\s*(\[?\w+\]?)\s*=\s*(\d+)',
+        re.MULTILINE | re.IGNORECASE
+    )
+
+    for match in all_items_pattern.finditer(enum_body):
+        item_name = match.group(1)
+        # 移除可能的方括号
+        raw_item_name = item_name.strip('[]')
+        value = int(match.group(2))
+
+        # 检查是否已处理过这个值
+        if value in used_values:
             continue
 
-        proto_name = item_match.group(1)
-        value = int(item_match.group(3))
-        if value not in used_values:
-            used_values.add(value)
+        # 如果这个项有ProtoEnum注解，使用注解中的名称
+        if raw_item_name in proto_enum_items:
+            proto_name, proto_value = proto_enum_items[raw_item_name]
             enum_items.append((proto_name, value))
+            used_values.add(value)
+        else:
+            # 否则使用原始名称
+            enum_items.append((raw_item_name, value))
+            used_values.add(value)
 
-    enum_items.sort(key=lambda x: x[1])
+    # 尝试匹配不带值的枚举项
+    if not enum_items:
+        simple_item_pattern = re.compile(
+            r'^\s*(\[?\w+\]?)\s*(?:=\s*(\d+))?\s*$',
+            re.MULTILINE | re.IGNORECASE
+        )
+
+        next_value = 0
+        matches = list(simple_item_pattern.finditer(enum_body))
+        for simple_match in matches:
+            item_name = simple_match.group(1)
+            raw_item_name = item_name.strip('[]')
+
+            if simple_match.group(2):
+                value = int(simple_match.group(2))
+                next_value = value + 1
+            else:
+                value = next_value
+                next_value += 1
+
+            if value not in used_values:
+                used_values.add(value)
+                enum_items.append((raw_item_name, value))
+
     for name, value in enum_items:
-        result += f"{indent_str}    {name} = {value};\n"
+        lines.append(f"{indent_str}    {name} = {value};")
 
-    result += f"{indent_str}}}\n\n"
-    return result
+    lines.append(f"{indent_str}}}")
+    lines.append("")
+
+    return "\n".join(lines)
 
 def extract_top_level_definitions(content):
     definitions = []
 
-    # 查找所有带ProtoContract的类
-    class_pattern = re.compile(
-        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_\s*'
-        r'(?:Partial\s+)?Public\s+Class\s+(\w+)',
-        re.IGNORECASE | re.DOTALL
-    )
-
-    # 查找所有带ProtoContract的枚举
-    enum_pattern = re.compile(
-        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_\s*'
-        r'Public\s+Enum\s+(\w+)',
-        re.IGNORECASE | re.DOTALL
-    )
-
-    # 找到Namespace的范围
+    # 查找Namespace的范围
     namespace_match = re.search(r'Namespace\s+\w+', content, re.IGNORECASE)
     namespace_end_match = re.search(r'End\s+Namespace', content, re.IGNORECASE)
 
@@ -467,113 +511,102 @@ def extract_top_level_definitions(content):
     else:
         namespace_content = content
 
-    # 收集所有类定义
-    for match in class_pattern.finditer(namespace_content):
-        start_pos = match.start()
-        class_name = match.group(1)
+    # 构建类和枚举的层级结构
+    class_boundaries = []
 
-        # 检查是否在另一个类内部
-        before_text = namespace_content[:start_pos]
+    # 查找所有类边界
+    class_pattern = re.compile(r'\bClass\s+(\w+)', re.IGNORECASE)
 
-        # 查找所有类的开始和结束
-        is_nested = False
-        current_pos = 0
-        open_classes = []
+    # 构建类边界
+    for class_match in class_pattern.finditer(namespace_content):
+        start = class_match.start()
+        class_name = class_match.group(1)
+        # 找到对应的End Class
+        end_pos = find_matching_end(namespace_content, class_match.end(), 'Class', 'End\\s+Class')
+        if end_pos != -1:
+            class_boundaries.append((start, end_pos, class_name))
 
-        while current_pos < start_pos:
-            # 查找下一个Class或End Class
-            class_start = re.search(r'\bClass\s+(\w+)', before_text[current_pos:], re.IGNORECASE)
-            class_end = re.search(r'\bEnd\s+Class\b', before_text[current_pos:], re.IGNORECASE)
+    # 查找所有带ProtoContract的定义
+    proto_contract_pattern = re.compile(
+        r'<Global\.ProtoBuf\.ProtoContract[^>]*>\s*_',
+        re.IGNORECASE | re.DOTALL
+    )
 
-            if not class_start and not class_end:
-                break
+    for contract_match in proto_contract_pattern.finditer(namespace_content):
+        start_pos = contract_match.start()
 
-            if class_start and (not class_end or class_start.start() < class_end.start()):
-                open_classes.append(class_start.group(1))
-                current_pos += class_start.end()
-            elif class_end:
-                if open_classes:
-                    open_classes.pop()
-                current_pos += class_end.end()
+        # 查找ProtoContract之后的定义
+        rest_content = namespace_content[contract_match.end():]
 
-        if open_classes:
-            is_nested = True
+        # 检查是否为类
+        class_match = re.match(r'\s*(?:Partial\s+)?Public\s+Class\s+(\w+)', rest_content, re.IGNORECASE | re.DOTALL)
+        if class_match:
+            name = class_match.group(1)
+            # 检查是否为顶层类
+            is_top_level = True
+            for class_start, class_end, class_name in class_boundaries:
+                if class_start < start_pos < class_end and name != class_name:
+                    # 如果当前定义在另一个类内部，则不是顶层
+                    is_top_level = False
+                    break
 
-        if not is_nested:
-            # 找到类的结束
-            end_pos = find_matching_end(namespace_content, match.end(), 'Class', 'End\\s+Class')
-            if end_pos != -1:
-                definitions.append({
-                    'type': 'class',
-                    'name': class_name,
-                    'content': namespace_content[start_pos:end_pos],
-                    'start': start_pos
-                })
+            if is_top_level:
+                end_pos = find_matching_end(namespace_content, contract_match.end() + class_match.end(), 'Class', 'End\\s+Class')
+                if end_pos != -1:
+                    definitions.append({
+                        'type': 'class',
+                        'name': name,
+                        'content': namespace_content[start_pos:end_pos],
+                        'start': start_pos
+                    })
+            continue
 
-    # 收集所有枚举定义
-    for match in enum_pattern.finditer(namespace_content):
-        start_pos = match.start()
-        enum_name = match.group(1)
+        # 检查是否为枚举
+        enum_match = re.match(r'\s*Public\s+Enum\s+(\w+)', rest_content, re.IGNORECASE | re.DOTALL)
+        if enum_match:
+            name = enum_match.group(1)
+            # 检查是否为顶层枚举
+            is_top_level = True
+            for class_start, class_end, _ in class_boundaries:
+                if class_start < start_pos < class_end:
+                    is_top_level = False
+                    break
 
-        # 检查是否在类内部
-        before_text = namespace_content[:start_pos]
+            if is_top_level:
+                end_match = re.search(r'End\s+Enum', namespace_content[contract_match.end():], re.IGNORECASE)
+                if end_match:
+                    end_pos = contract_match.end() + end_match.end()
+                    definitions.append({
+                        'type': 'enum',
+                        'name': name,
+                        'content': namespace_content[start_pos:end_pos],
+                        'start': start_pos
+                    })
 
-        is_nested = False
-        current_pos = 0
-        open_classes = []
-
-        while current_pos < start_pos:
-            class_start = re.search(r'\bClass\s+(\w+)', before_text[current_pos:], re.IGNORECASE)
-            class_end = re.search(r'\bEnd\s+Class\b', before_text[current_pos:], re.IGNORECASE)
-
-            if not class_start and not class_end:
-                break
-
-            if class_start and (not class_end or class_start.start() < class_end.start()):
-                open_classes.append(class_start.group(1))
-                current_pos += class_start.end()
-            elif class_end:
-                if open_classes:
-                    open_classes.pop()
-                current_pos += class_end.end()
-
-        if open_classes:
-            is_nested = True
-
-        if not is_nested:
-            # 找到枚举的结束
-            end_match = re.search(r'End\s+Enum', namespace_content[start_pos:], re.IGNORECASE)
-            if end_match:
-                end_pos = start_pos + end_match.end()
-                definitions.append({
-                    'type': 'enum',
-                    'name': enum_name,
-                    'content': namespace_content[start_pos:end_pos],
-                    'start': start_pos
-                })
-
-    # 按位置排序
     definitions.sort(key=lambda x: x['start'])
-
     return definitions
 
 def convert_proto(content):
     definitions = extract_top_level_definitions(content)
 
-    proto_content = 'syntax = "proto3";\n\n'
+    lines = ['syntax = "proto3";', ""]
 
     for defn in definitions:
         if defn['type'] == 'enum':
-            proto_content += parse_vb_enum(defn['content'])
+            enum_content = parse_vb_enum(defn['content'])
+            if enum_content:
+                lines.append(enum_content)
 
     for defn in definitions:
         if defn['type'] == 'class':
-            proto_content += parse_vb_class(defn['content'])
+            class_content = parse_vb_class(defn['content'])
+            if class_content:
+                lines.append(class_content)
 
-    return proto_content
+    return "\n".join(lines)
 
 if __name__ == "__main__":
-    input_file_path = "D:\\Project\\Code2Protobuf\\input\\vb\\testDataC.vb"
+    input_file_path = "D:\\Project\\Code2Protobuf\\input\\pbn_vb\\testDataD.vb"
     output_file_path = "D:\\Project\\Code2Protobuf\\output\\output.proto"
 
     with open(input_file_path, 'r', encoding='utf-8') as f:
