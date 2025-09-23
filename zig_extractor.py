@@ -30,15 +30,114 @@ def parse_messages(content):
     oneof_fields_dict = {}
     map_messages = {}
 
+    # 匹配消息结构，包括嵌套结构
     message_regex = r'pub\s+const\s+([A-Za-z0-9_]+)\s*=\s*struct\s*\{([\s\S]*?)pub\s+const\s+_desc_table\s*=\s*\.\{([\s\S]*?)\};'
 
+    # 第一遍，收集所有 map 入口消息
     for match in re.finditer(message_regex, content):
         message_name = match.group(1)
         fields_content = match.group(2).strip()
         desc_table_content = match.group(3).strip()
 
-        oneof_fields = {}
+        # 检查这是否是 map
+        field_regex = r'([A-Za-z0-9_]+):\s*([^=\n]+)(?:\s*=\s*[^,\n]+)?[,\n]'
+        field_list = []
+        for field_match in re.finditer(field_regex, fields_content):
+            field_name = field_match.group(1)
+            field_type = field_match.group(2).strip()
+            field_list.append((field_name, field_type))
 
+        if message_name.endswith('Entry') and len(field_list) == 2 and \
+                field_list[0][0] == 'key' and field_list[1][0] == 'value':
+            desc_regex = r'\.([A-Za-z0-9_]+)\s*=\s*fd\((\d+|\w+),\s*(.[^)]+)\)'
+            key_field_type_info = None
+            value_field_type_info = None
+            for desc_match in re.finditer(desc_regex, desc_table_content):
+                field_name = desc_match.group(1)
+                field_type_info = desc_match.group(3) if desc_match.group(3) else ''
+                if field_name == 'key':
+                    key_field_type_info = field_type_info
+                elif field_name == 'value':
+                    value_field_type_info = field_type_info
+
+            key_zig_type = field_list[0][1]
+            value_zig_type = field_list[1][1]
+
+            # 转换 key 类型
+            key_proto_type = key_zig_type
+            if key_field_type_info:
+                if 'FixedInt = .I32' in key_field_type_info:
+                    if 'f32' in key_zig_type:
+                        key_proto_type = 'float'
+                    elif 'i32' in key_zig_type:
+                        key_proto_type = 'sfixed32'
+                    else:
+                        key_proto_type = 'fixed32'
+                elif 'FixedInt = .I64' in key_field_type_info:
+                    if 'f64' in key_zig_type:
+                        key_proto_type = 'double'
+                    elif 'i64' in key_zig_type:
+                        key_proto_type = 'sfixed64'
+                    else:
+                        key_proto_type = 'fixed64'
+                elif 'Varint = .ZigZagOptimized' in key_field_type_info:
+                    if 'i32' in key_zig_type:
+                        key_proto_type = 'sint32'
+                    elif 'i64' in key_zig_type:
+                        key_proto_type = 'sint64'
+                    else:
+                        key_proto_type = 'sint64'
+            key_proto_type = convert_type_to_proto(key_proto_type)
+
+            # 转换 value 类型
+            value_proto_type = value_zig_type
+            if value_field_type_info:
+                if 'FixedInt = .I32' in value_field_type_info:
+                    if 'f32' in value_zig_type:
+                        value_proto_type = 'float'
+                    elif 'i32' in value_zig_type:
+                        value_proto_type = 'sfixed32'
+                    else:
+                        value_proto_type = 'fixed32'
+                elif 'FixedInt = .I64' in value_field_type_info:
+                    if 'f64' in value_zig_type:
+                        value_proto_type = 'double'
+                    elif 'i64' in value_zig_type:
+                        value_proto_type = 'sfixed64'
+                    else:
+                        value_proto_type = 'fixed64'
+                elif 'Varint = .ZigZagOptimized' in value_field_type_info:
+                    if 'i32' in value_zig_type:
+                        value_proto_type = 'sint32'
+                    elif 'i64' in value_zig_type:
+                        value_proto_type = 'sint64'
+                    else:
+                        value_proto_type = 'sint64'
+            value_proto_type = convert_type_to_proto(value_proto_type)
+
+            map_messages[message_name] = (key_proto_type, value_proto_type)
+        # 注意：不会跳过这里；将在第二遍处理所有消息
+
+    # 第二遍，解析所有消息,包括非Entry
+    for match in re.finditer(message_regex, content):
+        message_name = match.group(1)
+        fields_content = match.group(2).strip()
+        desc_table_content = match.group(3).strip()
+
+        #跳过最终输出中的 map 条目消息
+        field_regex = r'([A-Za-z0-9_]+):\s*([^=\n]+)(?:\s*=\s*[^,\n]+)?[,\n]'
+        field_list = []
+        for field_match in re.finditer(field_regex, fields_content):
+            field_name = field_match.group(1)
+            field_type = field_match.group(2).strip()
+            field_list.append((field_name, field_type))
+
+        if message_name.endswith('Entry') and len(field_list) == 2 and \
+                field_list[0][0] == 'key' and field_list[1][0] == 'value':
+            continue  # 跳过输出中的 map 条目消息
+
+        # 解析 oneof
+        oneof_fields = {}
         union_regex = r'pub\s+const\s+([A-Za-z0-9_]+)\s*=\s*union\([^)]+\)\s*\{([\s\S]*?)pub\s+const\s+_union_desc\s*=\s*\.\{([\s\S]*?)\};'
         for union_match in re.finditer(union_regex, fields_content):
             union_name = union_match.group(1)
@@ -46,8 +145,8 @@ def parse_messages(content):
             union_desc = union_match.group(3).strip()
 
             fields = []
-            field_regex = r'([A-Za-z0-9_]+):\s*([^,\n]+)'
-            for field_match in re.finditer(field_regex, union_content):
+            field_regex_inner = r'([A-Za-z0-9_]+):\s*([^,\n]+)'
+            for field_match in re.finditer(field_regex_inner, union_content):
                 field_name = field_match.group(1)
                 field_type = field_match.group(2).strip()
 
@@ -99,16 +198,7 @@ def parse_messages(content):
 
             oneof_fields[union_name] = fields
 
-        fields = []
-        field_regex = r'([A-Za-z0-9_]+):\s*([^=\n]+)(?:\s*=\s*[^,\n]+)?[,\n]'
-        desc_regex = r'\.([A-Za-z0-9_]+)\s*=\s*fd\((\d+|\w+),\s*(.[^)]+)\)'
-
-        field_list = []
-        for field_match in re.finditer(field_regex, fields_content):
-            field_name = field_match.group(1)
-            field_type = field_match.group(2).strip()
-            field_list.append((field_name, field_type))
-
+        # 解析字段类型和数字
         field_dict = dict(field_list)
         field_numbers = {}
         field_types = {}
@@ -116,6 +206,7 @@ def parse_messages(content):
         oneof_union_types = {}
         packed_list_fields = {}
 
+        desc_regex = r'\.([A-Za-z0-9_]+)\s*=\s*fd\((\d+|\w+),\s*(.[^)]+)\)'
         for desc_match in re.finditer(desc_regex, desc_table_content):
             field_name = desc_match.group(1)
             field_number_str = desc_match.group(2)
@@ -177,95 +268,44 @@ def parse_messages(content):
                     if union_type_match:
                         oneof_union_types[field_name] = union_type_match.group(1)
 
-        if message_name.endswith('Entry') and len(field_list) == 2 and \
-                field_list[0][0] == 'key' and field_list[1][0] == 'value':
-            key_field_type = None
-            value_field_type = None
-            for desc_match in re.finditer(desc_regex, desc_table_content):
-                field_name = desc_match.group(1)
-                field_type_info = desc_match.group(3) if desc_match.group(3) else ''
-
-                if field_name == 'key':
-                    key_field_type = field_type_info
-                elif field_name == 'value':
-                    value_field_type = field_type_info
-
-            key_type = field_list[0][1]
-            if key_field_type:
-                if 'FixedInt = .I32' in key_field_type:
-                    if 'f32' in key_type:
-                        key_type = 'float'
-                    elif 'i32' in key_type:
-                        key_type = 'sfixed32'
-                    else:
-                        key_type = 'fixed32'
-                elif 'FixedInt = .I64' in key_field_type:
-                    if 'f64' in key_type:
-                        key_type = 'double'
-                    elif 'i64' in key_type:
-                        key_type = 'sfixed64'
-                    else:
-                        key_type = 'fixed64'
-                elif 'Varint = .ZigZagOptimized' in key_field_type:
-                    if 'i32' in key_type:
-                        key_type = 'sint32'
-                    elif 'i64' in key_type:
-                        key_type = 'sint64'
-                    else:
-                        key_type = 'sint64'
-            key_type = convert_type_to_proto(key_type)
-
-            value_type = field_list[1][1]
-            if value_field_type:
-                if 'FixedInt = .I32' in value_field_type:
-                    if 'f32' in value_type:
-                        value_type = 'float'
-                    elif 'i32' in value_type:
-                        value_type = 'sfixed32'
-                    else:
-                        value_type = 'fixed32'
-                elif 'FixedInt = .I64' in value_field_type:
-                    if 'f64' in value_type:
-                        value_type = 'double'
-                    elif 'i64' in value_type:
-                        value_type = 'sfixed64'
-                    else:
-                        value_type = 'fixed64'
-                elif 'Varint = .ZigZagOptimized' in value_field_type:
-                    if 'i32' in value_type:
-                        value_type = 'sint32'
-                    elif 'i64' in value_type:
-                        value_type = 'sint64'
-                    else:
-                        value_type = 'sint64'
-            value_type = convert_type_to_proto(value_type)
-
-            map_messages[message_name] = (key_type, value_type)
-            continue
-
+        # 构建字段列表
+        fields = []
         for field_name, field_type in field_list:
-            if field_name in field_types:
-                proto_type = field_types[field_name]
-            else:
-                proto_type = convert_type_to_proto(field_type)
+            is_map = False
+            final_type = None
 
-            if field_name in repeated_fields:
-                base_type = proto_type
+            list_match = re.match(r'ArrayList\(\s*([A-Za-z0-9_.]+)\s*\)', field_type)
+            if list_match:
+                full_entry_name = list_match.group(1)
+                # 尝试截取'.' 之后的最后一部分
+                simple_entry_name = full_entry_name.split('.')[-1]
+                if simple_entry_name in map_messages:
+                    is_map = True
+                    k, v = map_messages[simple_entry_name]
+                    final_type = f'map<{k}, {v}>'
 
-                if field_name in packed_list_fields and base_type in ['int32', 'int64', 'uint32', 'uint64',
-                                                                      'sint32', 'sint64', 'fixed32', 'fixed64',
-                                                                      'sfixed32', 'sfixed64', 'float', 'double']:
-                    proto_type = f'repeated {base_type}'
+            if not is_map:
+                if field_name in field_types:
+                    base_type = field_types[field_name]
                 else:
-                    if base_type in ['string', 'bytes']:
-                        proto_type = f'repeated {base_type}'
+                    base_type = convert_type_to_proto(field_type)
+
+                if field_name in repeated_fields:
+                    if field_name in packed_list_fields and base_type in [
+                        'int32', 'int64', 'uint32', 'uint64',
+                        'sint32', 'sint64', 'fixed32', 'fixed64',
+                        'sfixed32', 'sfixed64', 'float', 'double'
+                    ]:
+                        final_type = f'repeated {base_type}'
                     else:
-                        proto_type = f'repeated {base_type}'
+                        final_type = f'repeated {base_type}'
+                else:
+                    final_type = base_type
 
             if field_name in field_numbers:
                 fields.append({
                     'name': field_name,
-                    'type': proto_type,
+                    'type': final_type,
                     'number': field_numbers[field_name]
                 })
             elif field_name in oneof_union_types:
@@ -284,21 +324,11 @@ def parse_messages(content):
         if oneof_fields:
             oneof_fields_dict[message_name] = oneof_fields
 
-    for message in messages:
-        new_fields = []
-        for field in message['fields']:
-            if 'type' in field and isinstance(field['type'], str) and field['type'].startswith('repeated ') and field['type'].endswith('Entry'):
-                entry_type = field['type'].replace('repeated ', '')
-                if entry_type in map_messages:
-                    key_type, value_type = map_messages[entry_type]
-                    field['type'] = f'map<{key_type}, {value_type}>'
-            new_fields.append(field)
-        message['fields'] = new_fields
-
     return messages, oneof_fields_dict
 
 def convert_type_to_proto(zig_type):
-    base_type = zig_type.split('.')[-1].strip().lstrip('?')
+    clean_type = zig_type.lstrip('?')
+    base_type = clean_type.split('.')[-1].strip()
 
     type_mapping = {
         'i32': 'int32',
@@ -315,18 +345,17 @@ def convert_type_to_proto(zig_type):
         if base_type.startswith(zig):
             return proto
 
+    # 处理 ArrayList
     if base_type.startswith('ArrayList'):
-        inner_type = re.search(r'ArrayList\(([^)]+)\)', base_type)
-        if inner_type:
-            inner_str = inner_type.group(1).strip()
-            inner_proto = convert_type_to_proto(inner_str)
+        inner_match = re.search(r'ArrayList\(([^)]+)\)', base_type)
+        if inner_match:
+            inner = inner_match.group(1).strip()
+            inner_proto = convert_type_to_proto(inner)
             if not inner_proto.startswith('repeated '):
-                return f'repeated {inner_proto}'
+                return inner_proto
             return inner_proto
 
-    if zig_type.startswith('?'):
-        return convert_type_to_proto(zig_type[1:])
-
+    # 直接返回自定义类型
     return base_type
 
 def generate_proto_enums(enums):
@@ -350,24 +379,21 @@ def generate_proto_messages(messages, oneof_fields_dict):
             if field.get('is_oneof', False):
                 oneof_name = field['name']
                 union_type = field['type']
-
                 if message['name'] in oneof_fields_dict:
-                    message_oneof_fields = oneof_fields_dict[message['name']]
-                    if union_type in message_oneof_fields:
-                        oneof_groups[oneof_name] = message_oneof_fields[union_type]
+                    msg_oneof = oneof_fields_dict[message['name']]
+                    if union_type in msg_oneof:
+                        oneof_groups[oneof_name] = msg_oneof[union_type]
             else:
                 regular_fields.append(field)
 
+        # 输出普通字段
         for field in sorted(regular_fields, key=lambda x: x['number']):
-            field_type = field['type']
-            if field_type.startswith('repeated '):
-                proto_output += f'    repeated {field_type.replace("repeated ", "")} {field["name"]} = {field["number"]};\n'
-            else:
-                proto_output += f'    {field_type} {field["name"]} = {field["number"]};\n'
+            proto_output += f'    {field["type"]} {field["name"]} = {field["number"]};\n'
 
+        # 输出 oneof 组
         for oneof_name, fields in oneof_groups.items():
-            clean_oneof_name = oneof_name.replace("_union", "")
-            proto_output += f'    oneof {clean_oneof_name} {{\n'
+            clean_name = oneof_name.replace("_union", "")
+            proto_output += f'    oneof {clean_name} {{\n'
             for field in sorted(fields, key=lambda x: x['number']):
                 proto_output += f'        {field["type"]} {field["name"]} = {field["number"]};\n'
             proto_output += '    }\n'
@@ -376,6 +402,7 @@ def generate_proto_messages(messages, oneof_fields_dict):
     return proto_output
 
 def convert_proto(content):
+    # 删除注释
     clean_content = re.sub(r'//.*', '', content)
     clean_content = re.sub(r'/\*.*?\*/', '', clean_content, flags=re.DOTALL)
 
@@ -388,10 +415,9 @@ def convert_proto(content):
 
     return proto_output
 
-
 if __name__ == '__main__':
-    file_path = os.path.join(os.path.dirname(__file__), 'testDataC.pb.zig')
-    output_path = os.path.join(os.path.dirname(__file__), 'output.proto')
+    file_path = "D:\\Project\\Code2Protobuf\\input\\zig\\testDataD.pb.zig"
+    output_path = "D:\\Project\\Code2Protobuf\\output\\output.proto"
 
     with open(file_path, 'r', encoding='utf-8') as f:
         file_content = f.read()
