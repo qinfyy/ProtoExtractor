@@ -81,21 +81,43 @@ def extract_from_java(java_code):
     raw_bytes = process_escape_sequences(full_string).encode("latin-1")
     return raw_bytes
 
-def extract_from_go(go_code):
+def extract_from_go(go_code: str) -> bytes | None:
+    # 新版本
+    # const file_testDataC_proto_rawDesc = "..." + "..."
+    const_match = re.search(r'const\s+file_\w+_proto_rawDesc\s*=', go_code)
+    if const_match:
+        start_idx = const_match.end()
+        remaining_code = go_code[start_idx:]
+
+        # 匹配连续的字符串字面量，允许中间有 +、空格、换行
+        string_parts = re.findall(r'"((?:\\.|[^"\\])*)"', remaining_code)
+        if string_parts:
+            full_escaped = ''.join(string_parts)
+            try:
+                # cnmd go lang, cnmd protobuf-go
+                return process_go_escape_sequences(full_escaped)
+            except ValueError as e:
+                print(f"Error decoding Go escape sequences: {e}")
+                return None
+
+    # 旧版本
     # var file_filename_proto_rawDesc = []byte{...}
     # var file_filename_proto_rawDesc = string([]byte{...})
     pattern = re.compile(
         r'var\s+file_\w+_proto_rawDesc\s*=\s*(?:string\s*\()?\s*\[\]byte\s*\{([\s\S]+?)\}(?:\s*\))?',
         re.DOTALL
     )
-
     match = pattern.search(go_code)
-    if not match:
-        print("Raw descriptor byte array not found in Go code")
-        return None
+    if match:
+        byte_array_content = match.group(1)
+        try:
+            return parse_go_byte_array(byte_array_content)
+        except ValueError as e:
+            print(f"Error parsing Go byte array: {e}")
+            return None
 
-    byte_array_content = match.group(1)
-    return parse_go_byte_array(byte_array_content)
+    print("Raw descriptor not found in Go code")
+    return None
 
 def extract_from_python(python_code):
     # DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'...')
@@ -202,23 +224,23 @@ def extract_from_cpp(cpp_code):
         r"\\\\|"
         r"."
         r")"
-        r")\s*?'", 
+        r")\s*?'",
         re.DOTALL
     )
-    
+
     char_matches = char_pattern.findall(array_content)
-    
+
     if char_matches:
         for char_match in char_matches:
             processed_char = process_escape_sequences(char_match, supports_unicode=False)
-            
+
             if not processed_char:
                 print(f"Warning: Failed to process escape sequence: {char_match}")
                 continue
-                
+
             if len(processed_char) != 1:
                 print(f"Warning: Processed character should be single byte but got: {processed_char}")
-                
+
             for char in processed_char:
                 char_code = ord(char)
                 if char_code < 256:
@@ -226,10 +248,10 @@ def extract_from_cpp(cpp_code):
                 else:
                     print(f"Warning: Character code out of byte range: {char_code}")
                     full_bytes.append(char_code & 0xFF)
-    
+
     if full_bytes:
         return bytes(full_bytes)
-    
+
     full_string = ""
     string_pattern = re.compile(r'"((?:\\"|[^"])*)"', re.DOTALL)
     for match in string_pattern.finditer(array_content):
@@ -240,9 +262,95 @@ def extract_from_cpp(cpp_code):
         processed_string = process_escape_sequences(full_string)
         raw_bytes = processed_string.encode("latin-1")
         return raw_bytes
-    
+
     print("No valid descriptor data found in C++ code")
     return None
+
+def process_go_escape_sequences(s: str) -> bytes:
+    out = bytearray()
+    i = 0
+    n = len(s)
+
+    while i < n:
+        c = s[i]
+
+        # 普通字符，UTF-8 编码
+        if c != '\\':
+            out.extend(c.encode('utf-8'))
+            i += 1
+            continue
+
+        # 处理转义
+        i += 1
+        if i >= n:
+            raise ValueError("Incomplete escape sequence")
+
+        esc = s[i]
+        i += 1
+
+        if esc == 'a':
+            out.append(0x07)
+        elif esc == 'b':
+            out.append(0x08)
+        elif esc == 'f':
+            out.append(0x0C)
+        elif esc == 'n':
+            out.append(0x0A)
+        elif esc == 'r':
+            out.append(0x0D)
+        elif esc == 't':
+            out.append(0x09)
+        elif esc == 'v':
+            out.append(0x0B)
+        elif esc == '\\':
+            out.append(0x5C)
+        elif esc == '"':
+            out.append(0x22)
+        elif esc == "'":
+            out.append(0x27)
+
+        # 八进制 \NNN（最多 3 位）
+        elif esc in '01234567':
+            digits = esc
+            for _ in range(2):
+                if i < n and s[i] in '01234567':
+                    digits += s[i]
+                    i += 1
+                else:
+                    break
+            val = int(digits, 8)
+            if val > 255:
+                raise ValueError("Octal escape out of range")
+            out.append(val)
+
+        # 十六进制 \xNN（单字节）
+        elif esc == 'x':
+            if i + 1 >= n:
+                raise ValueError("Incomplete \\x escape")
+            hex_digits = s[i:i+2]
+            out.append(int(hex_digits, 16))
+            i += 2
+
+        # Unicode \uXXXX
+        elif esc == 'u':
+            hex_digits = s[i:i+4]
+            codepoint = int(hex_digits, 16)
+            out.extend(chr(codepoint).encode('utf-8'))
+            i += 4
+
+        # Unicode \UNNNNNNNN
+        elif esc == 'U':
+            hex_digits = s[i:i+8]
+            codepoint = int(hex_digits, 16)
+            if codepoint > 0x10FFFF:
+                raise ValueError("Unicode out of range")
+            out.extend(chr(codepoint).encode('utf-8'))
+            i += 8
+
+        else:
+            raise ValueError(f"Unknown escape sequence: \\{esc}")
+
+    return bytes(out)
 
 def process_escape_sequences(escaped_string, supports_unicode=True):
     if supports_unicode:
