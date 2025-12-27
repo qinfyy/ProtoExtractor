@@ -1,143 +1,5 @@
-import re
-from pathlib import Path
+from typing import Tuple, Optional
 import google.protobuf.descriptor_pb2 as descriptor_pb2
-
-def generate_proto_file(descriptor_data, output_directory, source_code, source_language):
-    output_path = Path(output_directory)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    if source_language == 'php':
-        file_set = descriptor_pb2.FileDescriptorSet()
-        file_set.ParseFromString(descriptor_data)
-
-        generated_files = []
-        for file_proto in file_set.file:
-            proto_file_name = get_proto_file_name(source_code, file_proto, source_language)
-            output_file = output_path / proto_file_name
-
-            proto_content = generate_proto_content(file_proto)
-
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(proto_content)
-
-            print(f"Generated: {output_file}")
-            generated_files.append(str(output_file))
-    else:
-        file_descriptor = descriptor_pb2.FileDescriptorProto()
-        file_descriptor.ParseFromString(descriptor_data)
-
-        proto_file_name = get_proto_file_name(source_code, file_descriptor, source_language)
-        output_file = output_path / proto_file_name
-
-        proto_content = generate_proto_content(file_descriptor)
-
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(proto_content)
-
-        print(f"Generated: {output_file}")
-
-def get_proto_file_name(source_code, file_descriptor, source_language):
-    if file_descriptor.name:
-        return Path(file_descriptor.name).name
-
-    name = None
-    if source_language == 'csharp':
-        name = get_csharp_proto_name(source_code)
-    elif source_language == 'java':
-        name = get_java_proto_name(source_code)
-    elif source_language == 'go':
-        name = get_go_proto_name(source_code)
-    elif source_language == 'python':
-        name = get_python_proto_name(source_code)
-    elif source_language == 'ruby':
-        name = get_ruby_proto_name(source_code)
-    elif source_language == 'php':
-        name = get_php_proto_name(source_code)
-    elif source_language == 'cpp':
-        name = get_cpp_proto_name(source_code)
-
-    if name:
-        return name
-
-    raise ValueError(
-        "Cannot determine proto filename: Missing FileDescriptorProto.name and "
-        "no recognizable pattern in source code"
-    )
-
-def get_csharp_proto_name(csharp_code):
-    source_match = re.search(r'^//\s*source:\s*(.+?\.proto)\s*$', csharp_code, re.MULTILINE)
-    if source_match:
-        return Path(source_match.group(1)).name
-
-    pattern = re.compile(r'public\s+static\s+partial\s+class\s+(\w+)Reflection\b')
-    match = pattern.search(csharp_code)
-    if match:
-        return f"{match.group(1)}.proto"
-
-    return None
-
-def get_java_proto_name(java_code):
-    class_pattern = r"public\s+final\s+class\s+(\w+)(?:OuterClass)?\s*\{"
-    match = re.search(class_pattern, java_code)
-    if match:
-        class_name = match.group(1)
-        if class_name.endswith("OuterClass"):
-            class_name = class_name[:-len("OuterClass")]
-        return f"{class_name}.proto"
-    return None
-
-def get_go_proto_name(go_code):
-    source_match = re.search(r'^//\s*source:\s*(.+?\.proto)\s*$', go_code, re.MULTILINE)
-    if source_match:
-        return Path(source_match.group(1)).name
-
-    pattern = re.compile(r'var\s+file_(\w+)_proto_rawDesc')
-    match = pattern.search(go_code)
-    if match:
-        return f"{match.group(1)}.proto"
-
-    return None
-
-def get_python_proto_name(python_code):
-    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', python_code, re.MULTILINE)
-    if source_match:
-        return Path(source_match.group(1)).name
-    return None
-
-def get_ruby_proto_name(ruby_code):
-    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', ruby_code, re.MULTILINE)
-    if source_match:
-        return Path(source_match.group(1)).name
-    return None
-
-def get_php_proto_name(php_code):
-    source_match = re.search(r'^#\s*source:\s*(.+?\.proto)\s*$', php_code, re.MULTILINE)
-    if source_match:
-        return Path(source_match.group(1)).name
-
-    class_match = re.search(r'class\s+(\w+)\s*\{', php_code)
-    if class_match:
-        return f"{class_match.group(1)}.proto"
-    
-    return None
-
-def get_cpp_proto_name(cpp_code):
-    source_match = re.search(r'^//\s*source:\s*(.+?\.proto)\s*$', cpp_code)
-    if source_match:
-        return Path(source_match.group(1)).name
-
-    pattern = re.compile(
-        r'const\s+char\s+descriptor_table_protodef_(\w+)\[\]',
-        re.DOTALL
-    )
-    match = pattern.search(cpp_code)
-    if match:
-        file_name = match.group(1)
-        file_name = file_name.replace('_2e', '.')
-        file_name = file_name.replace('_5f', '_')
-        return file_name
-
-    return None
 
 def generate_proto_content(file_descriptor):
     lines = []
@@ -288,3 +150,19 @@ def get_simple_type_name(full_name):
     if full_name.startswith("."):
         full_name = full_name[1:]
     return full_name.split(".")[-1]
+
+def generate_proto_from_bytes(descriptor_bytes: bytes) -> Tuple[str, Optional[str]]:
+
+    file_descriptor = descriptor_pb2.FileDescriptorProto()
+    file_descriptor.ParseFromString(descriptor_bytes)
+
+    proto_content = generate_proto_content(file_descriptor)
+
+    # name
+    proto_filename = file_descriptor.name
+    if proto_filename:
+        proto_filename = proto_filename
+    else:
+        proto_filename = None
+
+    return proto_content, proto_filename

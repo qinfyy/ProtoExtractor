@@ -2,7 +2,7 @@ import sys
 import argparse
 from pathlib import Path
 from descriptor_extractor import extract_descriptor_data
-from proto_generator import generate_proto_file
+from proto_writer import generate_proto_file
 from prost_extractor import convert_rust_to_proto
 import zig_extractor
 import betterproto_extractor
