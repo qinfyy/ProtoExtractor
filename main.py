@@ -2,7 +2,7 @@ import sys
 import argparse
 from pathlib import Path
 from descriptor_extractor import extract_descriptor_data
-from proto_writer import generate_proto_file
+from proto_writer import generate_proto_file, process_pb_file
 from prost_extractor import convert_rust_to_proto
 import zig_extractor
 import betterproto_extractor
@@ -57,6 +57,8 @@ def process_file(file_path, output_dir, source_language, source_code):
             f.write(proto_content)
 
         print(f"Generated: {output_file}")
+    elif source_language == "pb":
+        process_pb_file(file_path, output_dir)
     else:
         descriptor_data = extract_descriptor_data(source_code, source_language)
         if not descriptor_data:
@@ -89,7 +91,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "-l", "--lang",
             dest="source_language",
-            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto", "pbn", "pbnvb"],
+            choices=["csharp", "java", "go", "python", "ruby", "php", "cpp", "prost", "zig", "betterproto", "pbn", "pbnvb", "pb"],
             required=False,
         )
         parser.add_argument(
@@ -125,8 +127,12 @@ if __name__ == "__main__":
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if input_path.is_file():
-            with open(input_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
+            if source_language == "pb":
+                with open(input_path, "rb") as f:
+                    source_code = f.read()
+            else:
+                with open(input_path, "r", encoding="utf-8") as f:
+                    source_code = f.read()
 
             process_file(input_path, output_dir, source_language, source_code)
 
@@ -151,9 +157,10 @@ if __name__ == "__main__":
                 file_pattern = "*.zig"
             elif source_language == "pbnvb":
                 file_pattern = "*.vb"
+            elif source_language == "pb":
+                file_pattern = "*.pb"
             else:
                 raise ValueError(f"Unsupported language: {source_language}")
-
             source_files = list(input_path.rglob(file_pattern))
 
             if not source_files:
@@ -162,8 +169,12 @@ if __name__ == "__main__":
 
             for file_path in source_files:
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        source_code = f.read()
+                    if source_language == "pb":
+                        with open(file_path, "rb") as f:
+                            source_code = f.read()
+                    else:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            source_code = f.read()
 
                     process_file(file_path, output_dir, source_language, source_code)
 

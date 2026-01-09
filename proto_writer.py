@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import sys
 from proto_generator import generate_proto_from_bytes
 from google.protobuf.descriptor_pb2 import FileDescriptorSet, FileDescriptorProto
 
@@ -121,10 +122,13 @@ def generate_proto_file(descriptor_data, output_directory, source_code, source_l
 
             if proto_name_from_descriptor is not None:
                 proto_file_name = proto_name_from_descriptor
+                if isinstance(proto_file_name, bytes):
+                    proto_file_name = proto_file_name.decode("utf-8", errors="ignore")
             else:
                 proto_file_name = get_proto_file_name(source_code, file_proto, source_language)
 
             output_file = output_path / proto_file_name
+            output_file.parent.mkdir(parents=True, exist_ok=True)
 
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(proto_content)
@@ -140,15 +144,70 @@ def generate_proto_file(descriptor_data, output_directory, source_code, source_l
 
         if proto_name_from_descriptor is not None:
             proto_file_name = proto_name_from_descriptor
+            if isinstance(proto_file_name, bytes):
+                proto_file_name = proto_file_name.decode("utf-8", errors="ignore")
         else:
             proto_file_name = get_proto_file_name(source_code, file_descriptor, source_language)
 
         output_file = output_path / proto_file_name
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(proto_content)
 
         print(f"Generated: {output_file}")
         generated_files.append(str(output_file))
+
+    return generated_files
+
+def process_pb_file(file_path: Path, output_path: Path):
+    with open(file_path, "rb") as f:
+        descriptor_data = f.read()
+
+    generated_files = []
+
+    fds = FileDescriptorSet()
+    try:
+        fds.ParseFromString(descriptor_data)
+        if fds.file:
+            for fd in fds.file:
+                proto_content, proto_name_from_descriptor = generate_proto_from_bytes(fd.SerializeToString())
+
+                proto_name = proto_name_from_descriptor or fd.name or (file_path.stem + ".proto")
+                if isinstance(proto_name, bytes):
+                    proto_name = proto_name.decode("utf-8", errors="ignore")
+
+                output_file = output_path / proto_name
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(output_file, "w", encoding="utf-8") as out_f:
+                    out_f.write(proto_content)
+
+                print(f"Generated: {output_file}")
+                generated_files.append(str(output_file))
+            return generated_files
+    except Exception:
+        pass
+
+    try:
+        proto_content, proto_name_from_descriptor = generate_proto_from_bytes(descriptor_data)
+
+        if proto_name_from_descriptor:
+            if isinstance(proto_name_from_descriptor, bytes):
+                proto_name_from_descriptor = proto_name_from_descriptor.decode("utf-8", errors="ignore")
+            proto_file_name = proto_name_from_descriptor
+        else:
+            proto_file_name = file_path.stem + ".proto"
+
+        output_file = output_path / proto_file_name
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(proto_content)
+
+        print(f"Generated: {output_file}")
+        generated_files.append(str(output_file))
+    except Exception as e:
+        print(f"Failed to process pb file {file_path}: {e}", file=sys.stderr)
 
     return generated_files
